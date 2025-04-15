@@ -1,0 +1,158 @@
+:root {
+  --sidebar-width-expanded: 250px;
+  --sidebar-width-collapsed: 60px;
+  --sidebar-transition-speed: 0.3s ease;
+}
+
+.sidebar {
+  width: var(--sidebar-width-expanded);
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  background-color: #343a40; /* Dark background */
+  color: #f8f9fa; /* Light text */
+  padding: 1rem 0;
+  transition: width var(--sidebar-transition-speed);
+  overflow: hidden; /* Hide text when collapsed */
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-width-collapsed);
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: flex-end; /* Position toggle button to the right */
+  padding: 0 1rem 1rem 1rem;
+  align-items: center;
+  /* Add styles for logo/title if needed */
+}
+
+.sidebar.collapsed .sidebar-header {
+  justify-content: center; /* Center toggle button when collapsed */
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  color: #adb5bd; /* Light gray for icon */
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.toggle-btn:hover {
+  color: #f8f9fa; /* White on hover */
+}
+
+.sidebar-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex-grow: 1; /* Allow list to take remaining space */
+}
+
+.sidebar-item {
+  /* No specific style needed */
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  text-decoration: none;
+  color: #dee2e6; /* Lighter gray text */
+  transition: background-color var(--sidebar-transition-speed), color 0.2s;
+  white-space: nowrap; /* Prevent text wrapping */
+}
+
+.sidebar.collapsed .sidebar-link {
+  justify-content: center;
+  padding: 0.75rem 0;
+}
+
+.sidebar-link:hover {
+  background-color: #495057; /* Slightly lighter dark on hover */
+  color: #fff;
+}
+
+.sidebar-link.active {
+  background-color: #0d6efd; /* Blue for active */
+  color: #fff;
+  font-weight: 500;
+}
+
+.sidebar-link.active .link-icon,
+.sidebar-link.active .link-text {
+  color: #fff; /* Ensure text/icon color is white when active */
+}
+
+.link-icon {
+  margin-right: 0.75rem;
+  font-size: 1.1rem;
+  width: 24px; /* Fixed width for alignment */
+  text-align: center;
+  transition: margin-right var(--sidebar-transition-speed);
+}
+
+.sidebar.collapsed .link-icon {
+  margin-right: 0;
+  font-size: 1.3rem; /* Slightly larger icon when collapsed */
+}
+
+.link-text {
+  transition: opacity var(--sidebar-transition-speed);
+  opacity: 1;
+}
+
+.sidebar.collapsed .link-text {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+}
+
+.navbar {
+    background-color: #f8f9fa; /* Light background for the bar */
+    padding: 0.5rem 1rem; /* Padding top/bottom and left/right */
+    border-bottom: 1px solid #dee2e6; /* Subtle line underneath */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); /* Subtle shadow */
+}
+
+.navbar-list {
+    list-style: none; /* Remove default bullets */
+    padding: 0;
+    margin: 0;
+    display: flex; /* Arrange links horizontally */
+    gap: 1rem; /* Space between list items */
+    align-items: center; /* Align items vertically */
+}
+
+.navbar-item {
+    /* No specific styles needed here if using gap on ul */
+}
+
+.navbar-link {
+    text-decoration: none; /* Remove underline */
+    color: #0d6efd; /* Bootstrap blue link color */
+    padding: 0.5rem 0.75rem; /* Padding around the link text */
+    border-radius: 0.25rem; /* Slightly rounded corners */
+    transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out; /* Smooth hover effect */
+    display: block; /* Make the link fill the list item */
+}
+
+.navbar-link:hover {
+    color: #0a58ca; /* Darker blue on hover */
+    background-color: #e9ecef; /* Light background on hover */
+}
+
+/* Style for the active NavLink */
+.navbar-link.active {
+    background-color: #0d6efd; /* Blue background for active link */
+    color: white; /* White text for active link */
+    font-weight: 500; /* Slightly bolder */
+} 
