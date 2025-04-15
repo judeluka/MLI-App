@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { useReactToPrint } from 'react-to-print';
 import { db } from '../firebase';
 
 // Interface matching Firestore structure (ensure consistency with other pages)
@@ -77,6 +78,9 @@ const GroupSchedulePage: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
     const [dateRange, setDateRange] = useState<Date[]>([]);
+
+    // Ref for the printable content area - Update type to HTMLTableElement
+    const componentRef = useRef<HTMLTableElement>(null);
 
     useEffect(() => {
         if (!groupId) {
@@ -220,6 +224,24 @@ const GroupSchedulePage: React.FC = () => {
         fetchGroupAndSchedule();
     }, [groupId]); // Re-run if groupId changes
 
+    // --- Print Handler ---
+    const triggerPrint: () => void = useReactToPrint({
+        content: () => componentRef.current, // Ensure content points to the ref
+        documentTitle: `${group?.groupName || 'Group'} Schedule - ${new Date().toLocaleDateString()}`,
+        // Add other options as needed
+    } as any); // Keep assertion if types are incorrect
+
+    // Wrapper function to check ref before printing
+    const handleTriggerPrint = () => {
+        if (componentRef.current) {
+            triggerPrint(); // Call the function returned by the hook
+        } else {
+            console.error("Print Error: Reference to printable content is not available.");
+            // Optionally, inform the user with a state update or alert
+            setError("Could not initiate print: Content reference not found.");
+        }
+    };
+
     // --- Rendering Logic ---
     if (isLoading) return <div style={{ padding: '20px' }}>Loading group schedule...</div>;
     if (error) return <div style={{ padding: '20px', color: 'red' }}>Error: {error}</div>;
@@ -247,86 +269,135 @@ const GroupSchedulePage: React.FC = () => {
     const weekendLunchTdStyle: React.CSSProperties = { ...tdStyle, fontStyle: 'italic', color: '#777' };
     const weekendActivityTdStyle: React.CSSProperties = { ...activityTdStyle, backgroundColor: '#f0f8ff' }; // Light blue background for weekend activities
 
+    const printButtonStyle: React.CSSProperties = {
+        position: 'absolute',
+        top: '20px',
+        right: '20px',
+        padding: '8px 15px',
+        cursor: 'pointer',
+        backgroundColor: '#198754', // Green color
+        color: 'white',
+        border: 'none',
+        borderRadius: '4px',
+        zIndex: 50, // Ensure it's visible
+    };
+
     return (
-        <div style={{ padding: '20px' }}>
-            {/* Use optional chaining for safety during initial render phases */}
-            <h2>Schedule Overview for {group?.groupName ?? 'Loading...'}</h2>
-            <p>Client: {group?.Client ?? '...'}</p>
-            {/* Check if dates exist before formatting */}
-            <p>
-                Arrival: {group?.arrivalDate?.toDate()?.toLocaleDateString() ?? '...'} |
-                Departure: {group?.departureDate?.toDate()?.toLocaleDateString() ?? '...'}
-            </p>
-            {/* Add more group details if needed */}
+        <div style={{ padding: '20px', position: 'relative' }}>
+            {/* Print Button - Calls the wrapper function */}
+            <button 
+                onClick={handleTriggerPrint} // Use the wrapper function
+                style={printButtonStyle} 
+                className="print-button"
+            >
+                 Export to PDF
+            </button>
 
-             {/* Check if dateRange is populated before rendering table */}
-             {dateRange.length === 0 && !isLoading && <p>No date range calculated for this group.</p>}
+            {/* Ref applied to the main content div - NO, move to table */}
+            <div className="printable-content"> {/* Keep this div for structure if needed, but ref moves */}
+                {/* Use optional chaining for safety during initial render phases */}
+                <h2 style={{ textAlign: 'center' }}>Schedule Overview for {group?.groupName ?? 'Loading...'}</h2>
+                <p style={{ textAlign: 'center' }}>Client: {group?.Client ?? '...'}</p>
+                {/* Check if dates exist before formatting */}
+                <p style={{ textAlign: 'center' }}>
+                    Arrival: {group?.arrivalDate?.toDate()?.toLocaleDateString() ?? '...'} |
+                    Departure: {group?.departureDate?.toDate()?.toLocaleDateString() ?? '...'}
+                </p>
+                {/* Add more group details if needed */}
 
-             {dateRange.length > 0 && (
-                 // Removed the outer div with fixed height/scroll, allow natural page scroll
-                 <table style={tableStyle}>
-                     <thead>
-                         <tr>
-                             <th style={dateThStyle}>Date</th>
-                             {scheduleColumns.map(colName => (
-                                 <th key={colName} style={thStyle}>{colName}</th>
-                             ))}
-                         </tr>
-                     </thead>
-                     <tbody>
-                         {dateRange.map(date => {
-                             const dateStr = format(date, 'yyyy-MM-dd');
-                             const dailyEntry = schedule[dateStr];
-                             const activityText = dailyEntry?.activity || '-';
-                             const activityTitle = dailyEntry?.activity || 'No activity scheduled';
-                             const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
-                             const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                 {/* Check if dateRange is populated before rendering table */}
+                 {dateRange.length === 0 && !isLoading && <p>No date range calculated for this group.</p>}
 
-                             return (
-                                 <tr key={dateStr}>
-                                     <td style={dateThStyle}>
-                                         {date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                                     </td>
-                                     {/* Render cells differently based on weekend status */}
-                                     {isWeekend ? (
-                                        <>
-                                            {/* Weekend: Breakfast */}
-                                            <td style={mealTdStyle} title="Breakfast Time">Breakfast</td>
-                                            {/* Weekend: Merged Activity Cell (spans 3 columns) */}
-                                            <td 
-                                                style={weekendActivityTdStyle} 
-                                                title={activityTitle} 
-                                                colSpan={3} // Merge Morning Activity, Lunch, Afternoon Activity
-                                            >
-                                                {activityText}
-                                            </td>
-                                            {/* Weekend: Dinner */}
-                                            <td style={mealTdStyle} title="Dinner Time">Dinner</td>
-                                            {/* Weekend: Evening Activity */}
-                                            <td style={weekendActivityTdStyle} title={activityTitle}>{activityText}</td>
-                                        </>
-                                     ) : (
-                                        <>
-                                            {/* Weekday: Breakfast */}
-                                            <td style={mealTdStyle} title="Breakfast Time">Breakfast</td>
-                                            {/* Weekday: Morning Activity */}
-                                            <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
-                                            {/* Weekday: Lunch */}
-                                            <td style={mealTdStyle} title="Lunch Time">Lunch</td>
-                                            {/* Weekday: Afternoon Activity */}
-                                            <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
-                                            {/* Weekday: Dinner */}
-                                            <td style={mealTdStyle} title="Dinner Time">Dinner</td>
-                                            {/* Weekday: Evening Activity */}
-                                            <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
-                                        </>
-                                     )}
-                                 </tr>
-                             );
-                         })}
-                     </tbody>
-                 </table>
-             )}
+                 {dateRange.length > 0 && (
+                     <table ref={componentRef} style={tableStyle}> {/* Apply ref directly to the table */}
+                         <thead>
+                             <tr>
+                                 <th style={dateThStyle}>Date</th>
+                                 {scheduleColumns.map(colName => (
+                                     <th key={colName} style={thStyle}>{colName}</th>
+                                 ))}
+                             </tr>
+                         </thead>
+                         <tbody>
+                             {dateRange.map(date => {
+                                 const dateStr = format(date, 'yyyy-MM-dd');
+                                 const dailyEntry = schedule[dateStr];
+                                 const activityText = dailyEntry?.activity || '-';
+                                 const activityTitle = dailyEntry?.activity || 'No activity scheduled';
+                                 const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+                                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                                 return (
+                                     <tr key={dateStr}>
+                                         <td style={dateThStyle}>
+                                             {date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                         </td>
+                                         {/* Render cells differently based on weekend status */}
+                                         {isWeekend ? (
+                                            <>
+                                                {/* Weekend: Breakfast */}
+                                                <td style={mealTdStyle} title="Breakfast Time">Breakfast</td>
+                                                {/* Weekend: Merged Activity Cell (spans 3 columns) */}
+                                                <td 
+                                                    style={weekendActivityTdStyle} 
+                                                    title={activityTitle} 
+                                                    colSpan={3} // Merge Morning Activity, Lunch, Afternoon Activity
+                                                >
+                                                    {activityText}
+                                                </td>
+                                                {/* Weekend: Dinner */}
+                                                <td style={mealTdStyle} title="Dinner Time">Dinner</td>
+                                                {/* Weekend: Evening Activity */}
+                                                <td style={weekendActivityTdStyle} title={activityTitle}>{activityText}</td>
+                                            </>
+                                         ) : (
+                                            <>
+                                                {/* Weekday: Breakfast */}
+                                                <td style={mealTdStyle} title="Breakfast Time">Breakfast</td>
+                                                {/* Weekday: Morning Activity */}
+                                                <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
+                                                {/* Weekday: Lunch */}
+                                                <td style={mealTdStyle} title="Lunch Time">Lunch</td>
+                                                {/* Weekday: Afternoon Activity */}
+                                                <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
+                                                {/* Weekday: Dinner */}
+                                                <td style={mealTdStyle} title="Dinner Time">Dinner</td>
+                                                {/* Weekday: Evening Activity */}
+                                                <td style={activityTdStyle} title={activityTitle}>{activityText}</td>
+                                            </>
+                                         )}
+                                     </tr>
+                                 );
+                             })}
+                         </tbody>
+                     </table>
+                 )}
+            </div>
+
+            {/* Add print-specific styles */}
+            <style type="text/css" media="print">
+                {`
+                    @page {
+                        size: landscape; /* Make PDF landscape */
+                        margin: 15mm; /* Adjust margins */
+                    }
+                    body {
+                        -webkit-print-color-adjust: exact; /* Ensures backgrounds print in Chrome/Safari */
+                        print-color-adjust: exact; /* Standard */
+                    }
+                    .print-button {
+                        display: none; /* Hide the print button in the PDF */
+                    }
+                    /* Add any other print-specific style adjustments */
+                    .printable-content {
+                         padding: 0; /* Remove screen padding for print */
+                         margin: 0;
+                    }
+                    h2, p {
+                        text-align: center;
+                    }
+                 `}
+            </style>
         </div>
     );
 };

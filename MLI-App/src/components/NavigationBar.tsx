@@ -1,12 +1,19 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import './NavigationBar.css';
 
-const NavigationBar: React.FC = () => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+// Define props interface
+interface NavigationBarProps {
+  isCollapsed: boolean;
+  onToggle: (isCollapsed: boolean) => void;
+}
+
+const NavigationBar: React.FC<NavigationBarProps> = ({ isCollapsed, onToggle }) => {
+  // Remove internal state, use props instead
+  // const [isCollapsed, setIsCollapsed] = useState(false);
 
   const toggleSidebar = () => {
-    setIsCollapsed(!isCollapsed);
+    onToggle(!isCollapsed); // Call the callback prop
   };
 
   return (
@@ -18,10 +25,29 @@ const NavigationBar: React.FC = () => {
         {/* Optionally add a logo or title here */} 
       </div>
       <ul className="sidebar-list">
-        <li className="sidebar-item">
+        {/* Replace single Dashboard link with multiple campus links */}
+        {/* <li className="sidebar-item">
           <NavLink to="/" className="sidebar-link">
-            <span className="link-icon">🏠</span> {/* Placeholder icon */}
+            <span className="link-icon">🏠</span>
             <span className="link-text">Dashboard</span>
+          </NavLink>
+        </li> */}
+        <li className="sidebar-item">
+          <NavLink to="/dashboard/ucd" className="sidebar-link">
+            <span className="link-icon">🏫</span> {/* Placeholder UCD icon */}
+            <span className="link-text">UCD Dashboard</span>
+          </NavLink>
+        </li>
+        <li className="sidebar-item">
+          <NavLink to="/dashboard/dcu" className="sidebar-link">
+            <span className="link-icon">🏛️</span> {/* Placeholder DCU icon */}
+            <span className="link-text">DCU Dashboard</span>
+          </NavLink>
+        </li>
+        <li className="sidebar-item">
+          <NavLink to="/dashboard/atu" className="sidebar-link">
+            <span className="link-icon">🎓</span> {/* Placeholder ATU icon */}
+            <span className="link-text">ATU Dashboard</span>
           </NavLink>
         </li>
         <li className="sidebar-item">

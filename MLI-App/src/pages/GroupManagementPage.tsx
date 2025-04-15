@@ -1,25 +1,21 @@
 import React, { useState, ChangeEvent, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom'; // Import Link
+import { Link, useNavigate } from 'react-router-dom'; // Import Link and useNavigate
 import Papa from 'papaparse'; // CSV Parsing library
-import { collection, addDoc, Timestamp, getDocs, DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, getDocs, DocumentData, QueryDocumentSnapshot, doc, writeBatch, deleteDoc } from 'firebase/firestore';
 // Make sure this path is correct for your project structure
 import { db } from '../firebase'; // Import your Firestore db instance
 
 // Define the expected structure of a CSV row after parsing
 // Adjust based on your *exact* CSV column headers
 interface CsvGroupRow {
-    GroupName: string;
-    ArrivalDate: string; // Expect 'YYYY-MM-DD'
-    DepartureDate: string; // Expect 'YYYY-MM-DD'
-    Client?: string; // Added Client field
-    ArrivalTime?: string; // Expect 'HH:MM' (optional)
-    DepartureTime?: string; // Expect 'HH:MM' (optional)
-    ArrivalLocation?: string; // (optional)
-    DepartureLocation?: string; // (optional)
-    Students?: string; // Expect number as string
-    Leaders?: string; // Expect number as string
-    Notes?: string; // (optional)
-    // Add other fields from your CSV as needed
+    Agency: string; // Renamed from Client/New
+    "Group Name": string; // Ensure exact match if space exists
+    Students: string; // Keep as string for parsing
+    Leaders: string; // Keep as string for parsing
+    Arrival: string; // Renamed from ArrivalDate, expect YYYY-MM-DD
+    Departure: string; // Renamed from DepartureDate, expect YYYY-MM-DD
+    Venue: string; // Renamed/New field for Campus ID
+    // Remove other optional fields unless they are brought back
 }
 
 // Define the structure to be saved in Firestore
@@ -48,6 +44,37 @@ interface GroupDocument extends FirestoreGroupData {
 // Define available sort keys (must match keys in GroupDocument)
 type SortableGroupKey = keyof GroupDocument;
 
+// Helper function to parse DD/MM/YYYY dates
+const parseDMYDate = (dateString: string): Date | null => {
+    if (!dateString) return null;
+    const parts = dateString.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!parts) {
+        console.warn(`Invalid date format for parsing: ${dateString}. Expected DD/MM/YYYY.`);
+        return null; // Invalid format
+    }
+    // parts[1] = DD, parts[2] = MM, parts[3] = YYYY
+    const day = parseInt(parts[1], 10);
+    const month = parseInt(parts[2], 10);
+    const year = parseInt(parts[3], 10);
+
+    // Basic validation (months are 1-12)
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+        console.warn(`Invalid date values after parsing: Day=${day}, Month=${month}, Year=${year} from ${dateString}`);
+        return null;
+    }
+
+    // Note: JavaScript Date months are 0-11
+    const date = new Date(Date.UTC(year, month - 1, day));
+    
+    // Additional check: Does the created date match the input parts? (handles invalid dates like 31/02/2024)
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+        console.warn(`Date parsed (${date.toISOString()}) does not match input parts: Day=${day}, Month=${month}, Year=${year} from ${dateString}`);
+        return null;
+    }
+
+    return date;
+};
+
 const GroupManagementPage: React.FC = () => {
     const [csvFile, setCsvFile] = useState<File | null>(null);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -55,6 +82,7 @@ const GroupManagementPage: React.FC = () => {
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [groups, setGroups] = useState<GroupDocument[]>([]); // State for fetched groups
     const [isLoadingGroups, setIsLoadingGroups] = useState<boolean>(true); // Loading state for groups
+    const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set()); // State for selected IDs
 
     // --- Sorting State ---
     const [sortKey, setSortKey] = useState<SortableGroupKey | null>(null);
@@ -141,7 +169,7 @@ const GroupManagementPage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
 
-        Papa.parse<CsvGroupRow>(csvFile, {
+        Papa.parse<CsvGroupRow>(csvFile!, { // Added non-null assertion assuming check passed
             header: true,
             skipEmptyLines: true,
             complete: async (results) => {
@@ -151,28 +179,43 @@ const GroupManagementPage: React.FC = () => {
 
                 console.log("Parsed CSV Data:", rows);
 
+                // Validate headers before processing rows
+                const expectedHeaders = ["Agency", "Group Name", "Students", "Leaders", "Arrival", "Departure", "Venue"];
+                const actualHeaders = results.meta.fields;
+                if (!actualHeaders || !expectedHeaders.every(header => actualHeaders.includes(header))) {
+                    setError(`CSV header mismatch. Expected headers: ${expectedHeaders.join(", ")}. Found: ${actualHeaders?.join(", ") || 'None'}. Please ensure the first row has the exact required headers.`);
+                    setIsProcessing(false);
+                    setCsvFile(null);
+                    // Clear file input
+                    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+                    if (fileInput) fileInput.value = '';
+                    return; // Stop processing
+                }
+
+
                 rows.forEach((row, index) => {
+                    // Use the exact headers specified
                     const {
-                        GroupName, ArrivalDate, DepartureDate, Client,
-                        ArrivalLocation, DepartureLocation, // Note: ArrivalTime, DepartureTime ignored here
-                        Students = '0', Leaders = '0', Notes = ''
+                        Agency, "Group Name": GroupName, Students, Leaders, Arrival, Departure, Venue
                     } = row;
 
-                    if (!GroupName || !ArrivalDate || !DepartureDate) {
-                        errors.push(`Row ${index + 2}: Missing required fields (GroupName, ArrivalDate, or DepartureDate).`);
+                    // Check if all required fields are present in the row data
+                    if (!Agency || !GroupName || Students === undefined || Leaders === undefined || !Arrival || !Departure || !Venue) {
+                        errors.push(`Row ${index + 2}: Missing required fields (Agency, Group Name, Students, Leaders, Arrival, Departure, Venue).`);
                         return;
                     }
 
-                    let arrivalDateObj: Date;
-                    let departureDateObj: Date;
+                    let arrivalDateObj: Date | null;
+                    let departureDateObj: Date | null;
                     try {
-                        arrivalDateObj = new Date(ArrivalDate + 'T00:00:00Z');
-                        departureDateObj = new Date(DepartureDate + 'T00:00:00Z');
-                        if (isNaN(arrivalDateObj.getTime()) || isNaN(departureDateObj.getTime())) {
-                            throw new Error('Invalid date format');
+                        arrivalDateObj = parseDMYDate(Arrival);
+                        departureDateObj = parseDMYDate(Departure);
+                        if (!arrivalDateObj || !departureDateObj) { // Check if parsing failed
+                            throw new Error('Invalid date format or value');
                         }
                     } catch (e) {
-                        errors.push(`Row ${index + 2}: Invalid date format for '${ArrivalDate}' or '${DepartureDate}'. Expected YYYY-MM-DD.`);
+                        // Error message updated
+                        errors.push(`Row ${index + 2}: Invalid date format or value for Arrival ('${Arrival}') or Departure ('${Departure}'). Expected DD/MM/YYYY.`);
                         return;
                     }
                     const studentsCount = parseInt(Students, 10);
@@ -182,19 +225,19 @@ const GroupManagementPage: React.FC = () => {
                         return;
                     }
 
-                    // Map CSV row to the FLAT Firestore structure
+                    // Map CSV row to the FLAT Firestore structure using new headers
                     const groupData: FirestoreGroupData = {
                         groupName: GroupName.trim(),
-                        Client: Client?.trim() || 'Unknown', // Match Firestore field case
+                        Client: Agency.trim(), // Map Agency to Client
                         studentCount: studentsCount,
                         leaderCount: leadersCount,
                         arrivalDate: Timestamp.fromDate(arrivalDateObj),
                         departureDate: Timestamp.fromDate(departureDateObj),
-                        arrivalAirport: ArrivalLocation?.trim() || undefined,
-                        departureAirport: DepartureLocation?.trim() || undefined,
-                        notes: Notes?.trim() || undefined,
-                        // --- Fields NOT currently populated from this CSV structure ---
-                        // campusId: 'DCU', // Example default if needed
+                        campusId: Venue.trim(), // Map Venue to campusId
+                        // --- Fields NOT currently populated from this specific CSV structure ---
+                        // arrivalAirport: undefined,
+                        // departureAirport: undefined,
+                        // notes: undefined,
                         // arrivalFlightNumber: undefined, 
                         // departureFlightNumber: undefined,
                         // needsArrivalTransfer: false, // Example default if needed 
@@ -305,33 +348,28 @@ const GroupManagementPage: React.FC = () => {
         });
     }, [groups, sortKey, sortOrder]);
 
-    // Basic Styling (consider moving to CSS file)
-    const containerStyle: React.CSSProperties = { padding: '20px', maxWidth: '1200px', margin: '0 auto' }; // Wider container
-    const errorStyle: React.CSSProperties = { color: 'red', whiteSpace: 'pre-wrap', marginTop: '10px', border: '1px solid red', padding: '10px', borderRadius: '4px', backgroundColor: '#ffebeb' };
-    const successStyle: React.CSSProperties = { color: 'green', marginTop: '10px', border: '1px solid green', padding: '10px', borderRadius: '4px', backgroundColor: '#e6ffed' };
-    const inputStyle: React.CSSProperties = { display: 'block', margin: '10px 0' };
-    const buttonStyle: React.CSSProperties = { padding: '10px 15px', cursor: 'pointer' };
-    const instructionsStyle: React.CSSProperties = { marginTop: '20px', padding: '15px', border: '1px solid #ccc', borderRadius: '4px', backgroundColor: '#f9f9f9', fontSize: '0.9em' };
-    // Styles for the group table
-    const tableContainerStyle: React.CSSProperties = { marginTop: '30px', overflowX: 'auto' };
-    const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse' };
-    const thStyle: React.CSSProperties = { 
-        border: '1px solid #ddd', 
-        padding: '8px', 
-        textAlign: 'left', 
-        backgroundColor: '#f2f2f2', 
-        fontWeight: 'bold', 
-        cursor: 'pointer', // Make header clickable
-        position: 'relative' // For positioning sort arrows
+    // --- Selection Handlers ---
+    const handleSelectGroup = (groupId: string) => {
+        setSelectedGroupIds(prevSelected => {
+            const newSelected = new Set(prevSelected);
+            if (newSelected.has(groupId)) {
+                newSelected.delete(groupId);
+            } else {
+                newSelected.add(groupId);
+            }
+            return newSelected;
+        });
     };
-    const tdStyle: React.CSSProperties = { border: '1px solid #ddd', padding: '8px', textAlign: 'left', verticalAlign: 'top' }; // Align top for better readability
-    // Style for sort arrows
-    const sortArrowStyle: React.CSSProperties = {
-        position: 'absolute',
-        right: '8px',
-        top: '50%',
-        transform: 'translateY(-50%)',
-        fontSize: '0.8em'
+
+    const handleSelectAll = (event: ChangeEvent<HTMLInputElement>) => {
+        if (event.target.checked) {
+            // Select all currently displayed (sorted) groups
+            const allDisplayedIds = sortedGroups.map(g => g.id).filter(id => !!id);
+            setSelectedGroupIds(new Set(allDisplayedIds));
+        } else {
+            // Deselect all
+            setSelectedGroupIds(new Set());
+        }
     };
 
     // Helper to format Timestamp
@@ -349,6 +387,91 @@ const GroupManagementPage: React.FC = () => {
     const renderSortArrow = (key: SortableGroupKey) => {
         if (sortKey !== key) return null;
         return <span style={sortArrowStyle}>{sortOrder === 'asc' ? '▲' : '▼'}</span>;
+    };
+
+    // Basic Styling (consider moving to CSS file)
+    const containerStyle: React.CSSProperties = { padding: '20px', maxWidth: '1200px', margin: '0 auto' };
+    const errorStyle: React.CSSProperties = { color: 'red', whiteSpace: 'pre-wrap', marginTop: '10px', border: '1px solid red', padding: '10px', borderRadius: '4px', backgroundColor: '#ffebeb' };
+    const successStyle: React.CSSProperties = { color: 'green', marginTop: '10px', border: '1px solid green', padding: '10px', borderRadius: '4px', backgroundColor: '#e6ffed' };
+    const inputStyle: React.CSSProperties = { display: 'block', margin: '10px 0' };
+    const buttonStyle: React.CSSProperties = { padding: '10px 15px', cursor: 'pointer' };
+    const instructionsStyle: React.CSSProperties = { marginTop: '20px', padding: '15px', border: '1px solid #ccc', borderRadius: '4px', backgroundColor: '#f9f9f9', fontSize: '0.9em' };
+    const tableContainerStyle: React.CSSProperties = { marginTop: '30px', overflowX: 'auto' };
+    const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse' };
+    const thStyle: React.CSSProperties = {
+        border: '1px solid #ddd',
+        padding: '8px',
+        textAlign: 'left',
+        backgroundColor: '#f2f2f2',
+        fontWeight: 'bold',
+        cursor: 'pointer',
+        position: 'relative'
+    };
+    const tdStyle: React.CSSProperties = { border: '1px solid #ddd', padding: '8px', textAlign: 'left', verticalAlign: 'top' };
+    const sortArrowStyle: React.CSSProperties = {
+        position: 'absolute',
+        right: '8px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        fontSize: '0.8em'
+    };
+
+    // --- Styling (Keep existing) --- 
+    // ... styles ...
+    const deleteButtonStyle: React.CSSProperties = {
+        ...buttonStyle, // Inherit base button style
+        backgroundColor: selectedGroupIds.size > 0 ? '#dc3545' : '#6c757d', // Red when active, gray when disabled
+        color: 'white',
+        marginLeft: '10px', // Add some space
+        cursor: selectedGroupIds.size > 0 ? 'pointer' : 'not-allowed',
+    };
+
+    // --- Delete Handler ---
+    const handleDeleteSelected = async () => {
+        if (selectedGroupIds.size === 0) {
+            setError("No groups selected for deletion.");
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Are you sure you want to delete ${selectedGroupIds.size} selected group(s)? This action cannot be undone.`
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        setIsProcessing(true); // Use isProcessing for general loading state
+        setError(null);
+        setSuccessMessage(null);
+
+        const idsToDelete = Array.from(selectedGroupIds);
+        const deletePromises = idsToDelete.map(id => {
+            const docRef = doc(db, 'groups', id);
+            return deleteDoc(docRef);
+        });
+
+        try {
+            // Wait for all delete operations
+            await Promise.all(deletePromises);
+
+            // Update local state: remove deleted groups
+            setGroups(prevGroups => 
+                prevGroups.filter(group => !selectedGroupIds.has(group.id))
+            );
+
+            // Clear selection
+            setSelectedGroupIds(new Set());
+            setSuccessMessage(`${idsToDelete.length} group(s) deleted successfully.`);
+
+        } catch (err) {
+            console.error("Error deleting groups:", err);
+            setError(`Failed to delete groups: ${err instanceof Error ? err.message : String(err)}. Some groups might still be selected.`);
+            // Optionally, re-fetch groups to ensure consistency if some deletions failed
+            // await fetchGroups(); 
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     return (
@@ -377,37 +500,40 @@ const GroupManagementPage: React.FC = () => {
             {error && <div style={errorStyle}>Error: {error}</div>}
             {successMessage && <div style={successStyle}>{successMessage}</div>}
 
-            {/* --- Instructions Section (Updated for consistency) --- */}
+            {/* --- Instructions Section (Updated) --- */}
             <div style={instructionsStyle}>
                  <h4>CSV Format Instructions:</h4>
                  <ul>
-                     <li>The first row must be a header row containing the exact names below (case-sensitive).</li>
-                     <li><strong>Required Columns:</strong>
+                     <li>The first row must be the header row containing the exact column names listed below (case-sensitive).</li>
+                     <li>Ensure the file is saved with UTF-8 encoding.</li>
+                     <li><strong>Required Columns (All must be present):</strong>
                          <ul>
-                             <li><code>GroupName</code></li>
-                             <li><code>ArrivalDate</code> (Format: YYYY-MM-DD)</li>
-                             <li><code>DepartureDate</code> (Format: YYYY-MM-DD)</li>
+                             <li><code>Agency</code> (Maps to: Client)</li>
+                             <li><code>Group Name</code> (Maps to: Group Name)</li>
+                             <li><code>Students</code> (Whole number, Maps to: Student Count)</li>
+                             <li><code>Leaders</code> (Whole number, Maps to: Leader Count)</li>
+                             <li><code>Arrival</code> (Format: DD/MM/YYYY, Maps to: Arrival Date)</li>
+                             <li><code>Departure</code> (Format: DD/MM/YYYY, Maps to: Departure Date)</li>
+                             <li><code>Venue</code> (Maps to: Campus ID)</li>
                          </ul>
                      </li>
-                     <li><strong>Optional Columns:</strong>
-                         <ul>
-                            <li><code>Client</code></li>
-                            <li><code>ArrivalLocation</code> (e.g., Airport Name, Campus) - Populates 'Arrival Airport'</li>
-                            <li><code>DepartureLocation</code> (e.g., Airport Name, Campus) - Populates 'Departure Airport'</li>
-                            <li><code>Students</code> (Whole number)</li>
-                            <li><code>Leaders</code> (Whole number)</li>
-                            <li><code>Notes</code></li>
-                            {/* Add instructions for Flight Numbers, etc. if columns are added to CSV */}
-                         </ul>
-                     </li>
-                     <li>Arrival/Departure Times from CSV are currently not imported.</li>
-                     <li>Ensure the file is saved with UTF-8 encoding if using special characters.</li>
+                     <li><em>Note:</em> Other fields like Airports, Flight Numbers, Notes, etc., are not imported with this specific format and will need to be added manually if required.</li>
                  </ul>
             </div>
 
             {/* --- Table Section (with Sortable Headers) --- */}
             <div style={tableContainerStyle}>
-                <h2>Existing Groups</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h2>Existing Groups</h2>
+                    <button
+                        style={deleteButtonStyle}
+                        onClick={handleDeleteSelected}
+                        disabled={selectedGroupIds.size === 0 || isProcessing}
+                        title={selectedGroupIds.size > 0 ? `Delete ${selectedGroupIds.size} selected group(s)` : 'Select groups to delete'}
+                    >
+                        {isProcessing ? 'Deleting...' : `Delete Selected (${selectedGroupIds.size})`}
+                    </button>
+                </div>
                 {isLoadingGroups ? (
                     <p>Loading groups...</p>
                 ) : groups.length === 0 && !error ? (
@@ -416,6 +542,15 @@ const GroupManagementPage: React.FC = () => {
                     <table style={tableStyle}>
                         <thead>
                             <tr>
+                                <th style={thStyle}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedGroupIds.size > 0 && selectedGroupIds.size === sortedGroups.length}
+                                        onChange={handleSelectAll}
+                                        // Indeterminate state can be added for more complex scenarios
+                                        title={selectedGroupIds.size > 0 ? "Deselect all" : "Select all displayed"}
+                                    />
+                                </th>
                                 <th style={thStyle} onClick={() => handleSort('groupName')}>
                                     Group Name {renderSortArrow('groupName')}
                                 </th>
@@ -460,6 +595,14 @@ const GroupManagementPage: React.FC = () => {
                         <tbody>
                             {sortedGroups.map((group) => (
                                 <tr key={group.id || `invalid-${Math.random()}`}>
+                                    <td style={tdStyle}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedGroupIds.has(group.id)}
+                                            onChange={() => handleSelectGroup(group.id)}
+                                            disabled={!group.id}
+                                        />
+                                    </td>
                                     <td style={tdStyle}>
                                         {group.id && typeof group.id === 'string' ? (
                                             <Link to={`/group/${group.id}/schedule`}>{group.groupName}</Link>
